@@ -2,16 +2,17 @@
 
 ```
 ╔══════════════════════════════════════════════════════╗
-║          SERVER TOOLKIT  v2.0                        ║
-║          Optimizer + Protection                      ║
+║              NODE-ARMOR  v1.0                          ║
+║   Optimizer + nftables Shield + CrowdSec               ║
 ╚══════════════════════════════════════════════════════╝
 ```
 
-**Выжми максимум из сервера. Одним скриптом.**
+**Защита и оптимизация VPN-ноды. Одним скриптом. Всё в nftables.**
 
 [![Bash](https://img.shields.io/badge/bash-5.0+-4EAA25?style=flat-square&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![OS](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu%20%7C%20Rocky%20%7C%20RHEL-orange?style=flat-square&logo=linux&logoColor=white)](https://github.com)
+[![Firewall](https://img.shields.io/badge/firewall-nftables-red?style=flat-square)](https://wiki.nftables.org)
 
 </div>
 
@@ -19,74 +20,137 @@
 
 ## Что это
 
-Интерактивный bash-скрипт для быстрой оптимизации и защиты Linux-серверов. Устанавливает современное ядро, настраивает сеть на максимум и поднимает kernel-space защиту — без лишних зависимостей и ручной возни с конфигами.
+Интерактивный bash-скрипт для оптимизации и защиты VPN-нод (Reality / VLESS / Hysteria / QUIC / WireGuard). Объединяет три слоя в одну согласованную систему, целиком на **nftables** — поэтому компоненты не конфликтуют между собой, как это бывает при смешивании `iptables` и `nft`.
 
-Работает на **Debian/Ubuntu** и **Rocky Linux / AlmaLinux / RHEL / CentOS Stream** — ОС определяется автоматически.
+Работает на **Debian/Ubuntu** и **Rocky Linux / AlmaLinux / RHEL** — ОС определяется автоматически.
+
+---
+
+## Архитектура: три слоя, один движок
+
+| Слой | Зона ответственности | Реализация |
+|---|---|---|
+| **Sysctl** | BBR, TCP-тюнинг, conntrack по RAM, stealth, IP-форвардинг | `sysctl.d` |
+| **nftables-щит** | SYN/UDP flood, conn-flood, new-conn flood, CGNAT-вайтлист, MSS clamp | нативный `nft` |
+| **CrowdSec** | детект из логов, SSH brute-force, community blocklist | + `nftables-bouncer` |
+
+Каждый слой делает то, что умеет лучше всего:
+- **Объёмные атаки** (flood) гасятся в kernel-space за микросекунды — это nftables.
+- **Поведенческий детект** (брутфорс, сканеры) и **превентивные баны** известных атакующих — это CrowdSec с community blocklist.
 
 ---
 
 ## Возможности
 
-### ⚡ Оптимизатор
+### ⚡ Оптимизатор (sysctl)
 
 | Компонент | Что делает |
 |---|---|
-| **XanMod / kernel-ml** | Свежее ядро с патчами под нагрузку *(XanMod на Debian/Ubuntu, kernel-ml через ELRepo на Rocky/RHEL)* |
-| **BBRv3 + fq** | Современный алгоритм управления перегрузкой, снимает потолок по пропускной способности |
+| **BBR + fq** | Современный congestion control, снимает потолок по пропускной способности |
 | **TCP Fast Open** | Убирает лишний RTT при установке соединения |
-| **MSS Clamp** | Устраняет фрагментацию через PMTU discovery |
-| **Conntrack tier-aware** | Автоматически выбирает лимиты под объём RAM сервера |
+| **TCP-буферы** | Расширенные окна под высоконагруженный трафик |
+| **Conntrack tier-aware** | Лимиты автоматически под объём RAM (критично — таблица conntrack переполняется при DDoS первой) |
+| **IP-форвардинг** | Включён для работы VPN-ноды |
+| **Stealth sysctl** | Анти-fingerprint, скрытие SSH-banner |
 
-### 🛡 Защита
+### 🛡 nftables-щит
 
 | Компонент | Что делает |
 |---|---|
-| **DDoS-фильтр** | SYN/UDP flood защита + ipset blacklist с авто-баном. Работает в kernel-space — в ~20x быстрее Fail2Ban |
-| **Port scan protection** | Детект Xmas/NULL/FIN сканов через `xt_recent`, без userspace демонов |
-| **Скрытность ноды** | Анти-fingerprinting sysctl, скрытие SSH banner, защита от РКН-детекта |
+| **SYN flood** | Per-IP rate-limit, лишнее — в drop |
+| **UDP flood** | Per-IP лимит, настроен щедро под QUIC/Hysteria |
+| **Conn-flood** | Лимит одновременных соединений с одного IP |
+| **New-conn flood** | Лимит новых соединений с одного IP в минуту |
+| **CGNAT-вайтлист** | Мягкая ветка для мобильных операторов — без false-positive |
+| **MSS clamp** | В forward-цепочке, устраняет фрагментацию VPN-трафика |
+| **SSH brute-force** | Per-IP лимит на новые SSH-сессии |
+
+### 🌐 CrowdSec
+
+| Компонент | Что делает |
+|---|---|
+| **Community blocklist** | Тысячи известных атакующих IP блокируются превентивно |
+| **Поведенческий детект** | SSH brute, сканеры, аномалии — из логов |
+| **nftables-bouncer** | Исполняет баны в том же слое, без iptables |
+| **CGNAT allowlist** | Мобильные операторы в белом списке — не банятся |
+
+---
+
+## ⚠️ Перед запуском — обязательно
+
+Открой скрипт и отредактируй блок конфигурации вверху файла:
+
+```bash
+VPN_TCP_PORTS="443 8443"          # твои TCP-порты
+VPN_UDP_PORTS="443 8443 51820"    # твои UDP-порты (Hysteria/QUIC/WG)
+SSH_PORT="auto"                    # "auto" определит из текущего соединения
+TRUSTED_IPS=""                     # свои ноды / домашний IP / мониторинг
+ENABLE_CGNAT="yes"                 # вайтлист мобильных операторов
+```
+
+**Почему это важно:** щит работает по принципу `policy drop` — всё, что явно не разрешено, блокируется. Если не указать свои порты, ты закроешь доступ сам себе.
+
+---
+
+## 🔒 Защита от lock-out
+
+Скрипт **не даст запереть себя**:
+
+1. **SSH-порт определяется автоматически** из текущего соединения и открывается всегда.
+2. **Авто-откат**: после применения firewall у тебя есть **90 секунд** открыть второе SSH-соединение и подтвердить доступ. Не подтвердил — правила автоматически откатываются к предыдущему состоянию.
+3. **Проверка синтаксиса** через `nft -c` до применения — сломанный конфиг не применится.
+4. **Бэкап** прошлого ruleset сохраняется в `/var/backups/node-armor/`.
 
 ---
 
 ## Запуск
 
 ```bash
-chmod +x server-toolkit.sh
-sudo bash server-toolkit.sh
+# 1. Отредактируй блок конфигурации вверху файла
+nano node-armor.sh
+
+# 2. Запусти
+sudo bash node-armor.sh
 ```
 
-Появится интерактивное меню. Выбираешь нужные пункты — скрипт делает остальное.
+Скрипт покажет, что будет установлено и какие порты откроет, спросит подтверждение, затем применит всё в правильном порядке.
 
-**Или без меню, передав номер напрямую:**
+---
+
+## Что с моими портами после запуска?
+
+| | Состояние |
+|---|---|
+| **SSH** | открыт всегда (авто-определение порта) |
+| **Перечисленные VPN-порты** | открыты |
+| **Остальное входящее** | закрыто (цель — убрать поверхность атаки) |
+| **Исходящий трафик** | не трогается, нода ходит в интернет как обычно |
+| **VPN-форвардинг** | сохранён (`ip_forward=1` + MSS clamp) |
+
+---
+
+## Полезные команды
 
 ```bash
-sudo bash server-toolkit.sh 5    # весь оптимизатор (без ядра)
-sudo bash server-toolkit.sh 10   # вся защита
-sudo bash server-toolkit.sh 11   # всё сразу (без ядра)
-sudo bash server-toolkit.sh 12   # всё сразу + новое ядро
+nft list table inet node_armor     # правила щита
+nft list meters                    # кто упёрся в лимиты (flood-детекторы)
+cscli metrics                      # статистика CrowdSec
+cscli decisions list               # активные баны
+cscli alerts list                  # история детектов
+cscli capi status                  # статус community blocklist
 ```
 
 ---
 
-## Меню
+## Тонкая настройка лимитов
 
-```
-  ОПТИМИЗАТОР
-  [1]  Ядро: XanMod (Debian/Ubuntu) / kernel-ml (Rocky/RHEL)
-  [2]  BBRv3 + TCP sysctl
-  [3]  MSS Clamp
-  [4]  Conntrack (tier-aware по RAM)
-  [5]  Весь оптимизатор (2+3+4, без ядра)
-  [6]  Весь оптимизатор + новое ядро
+Если ловишь false-positive (например, мультиплексинг с одного CGNAT-IP), подними в блоке конфигурации:
 
-  ЗАЩИТА
-  [7]  DDoS-фильтр
-  [8]  Защита от сканеров портов
-  [9]  Скрытность ноды (анти-РКН)
-  [10] Вся защита (7+8+9)
-
-  КОМБО
-  [11] Всё сразу (оптимизатор + защита, без ядра)
-  [12] Всё сразу + новое ядро
+```bash
+CONN_LIMIT="600"                  # одновременных соединений с IP
+NEWCONN_RATE="800/minute"         # новых соединений с IP в минуту
+SYN_RATE="300/second"             # SYN-пакетов с IP
+UDP_RATE="3000/second"            # UDP-пакетов с IP (QUIC)
 ```
 
 ---
@@ -95,21 +159,28 @@ sudo bash server-toolkit.sh 12   # всё сразу + новое ядро
 
 | Дистрибутив | Версии |
 |---|---|
-| Debian | 10, 11, 12 |
-| Ubuntu | 20.04, 22.04, 24.04 |
+| Debian | 11, 12 |
+| Ubuntu | 22.04, 24.04 |
 | Rocky Linux | 8, 9 |
 | AlmaLinux | 8, 9 |
 | RHEL | 8, 9 |
-| CentOS Stream | 8, 9 |
 
 ---
 
 ## Важные замечания
 
-- После установки нового ядра (`[1]`, `[6]`, `[12]`) — **нужна перезагрузка**
-- На Rocky/RHEL скрипт автоматически отключает `firewalld` и переходит на `iptables`
-- Все sysctl сохраняются в `/etc/sysctl.d/99-server-toolkit.conf`
-- Правила iptables персистентны: `/etc/iptables/rules.v4` (Debian) или `/etc/sysconfig/iptables` (RHEL)
+- Всё работает через **nftables** — никакого `iptables`, поэтому нет конфликта слоёв.
+- Sysctl сохраняется в `/etc/sysctl.d/99-node-armor.conf`.
+- Правила firewall: `/etc/nftables.d/node-armor.nft`, подключаются через `/etc/nftables.conf`, персистентны через `nftables.service`.
+- Установка ядра (`DO_KERNEL="yes"`) **требует перезагрузки** и по умолчанию отключена.
+- CrowdSec ставится официальным установщиком; bouncer — `crowdsec-firewall-bouncer-nftables`.
+
+---
+
+## Чего здесь сознательно нет
+
+- **Port-scan через `xt_recent`** — CrowdSec ловит сканеры умнее и без расхода CPU.
+- **traffic-guard на iptables** — чтобы остаться в чистом nftables. Те же preemptive-листы добавляются через `cscli blocklists`.
 
 ---
 
