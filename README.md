@@ -118,11 +118,29 @@ DO_KERNEL="no"                     # XanMod/kernel-ml, требует reboot
 
 ---
 
+## Установка
+
+Скачать скрипт с GitHub:
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/WayneFX36/toolskit/refs/heads/main/server-toolkit.sh
+chmod +x server-toolkit.sh
+```
+
+Или через wget:
+
+```bash
+wget https://raw.githubusercontent.com/WayneFX36/toolskit/refs/heads/main/server-toolkit.sh
+chmod +x server-toolkit.sh
+```
+
+> **Не запускай через `curl ... | bash`** — сначала скачай файл, открой и отредактируй блок конфигурации вверху (порты, SSH, компоненты), и только потом запускай. Пайп в bash не даст настроить порты и рискует запереть SSH.
+
 ## Запуск
 
 ```bash
-nano node-armor.sh        # отредактируй конфиг вверху
-sudo bash node-armor.sh
+nano server-toolkit.sh    # отредактируй конфиг вверху (порты, SSH, компоненты)
+sudo bash server-toolkit.sh
 ```
 
 ---
